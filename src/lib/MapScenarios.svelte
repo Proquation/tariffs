@@ -1,5 +1,4 @@
 <script>
-	// (as of September 1, 2025)
 	import logoBlueColour from '../assets/sofc-uoft-logo-blue-colour.svg';
 	import "../assets/global-styles.css";
 
@@ -114,29 +113,32 @@
 	// ];
 
 	const scenarios = [
-		{ id: 1, code: 'DFD1_HHLD_CON', label: 'Household Consumption' },
-		{ id: 3, code: 'DFD3_AG_AF_SF', label: 'Agri-food & Seafood' },
-		{ id: 4, code: 'DFD4_ST_AL',    label: 'Steel & Aluminum' },
-		{ id: 5, code: 'DFD5_FOR',      label: 'Softwood Lumber' },
-		{ id: 6, code: 'DFD6_VEH_PTS',  label: 'Autos & Parts' }
+		{ id: 1, code: 'DFD1_HHLD_CON', label: 'Household Consumption', description: 'In the household consumption scenario, we model the potential impact on jobs if household consumption expenditures across Canada decline by 1%.' },
+		{ id: 3, code: 'DFD3_AG_AF_SF', label: 'Agri-food & Seafood',   description: 'In the agri-food and seafood scenario, we model the potential impact on jobs if agriculture, agri-food, and seafood exports to the U.S. decline by between 7% and 16%, depending on the industry.' },		
+		{ id: 4, code: 'DFD4_ST_AL',    label: 'Steel & Aluminum',      description: 'In the steel and aluminum scenario, we model the potential impact on jobs if steel and aluminum exports to the U.S. decline by 15% and 10%, respectively.' },
+		{ id: 5, code: 'DFD5_FOR',      label: 'Softwood Lumber',       description: 'In the softwood lumber scenario, we model the potential impact on jobs if softwood lumber exports to the U.S. decline by 12%.' },
+		{ id: 6, code: 'DFD6_VEH_PTS',  label: 'Automotive & Parts',    description: 'In the automotive and parts scenario, we model the potential impact on jobs if motor vehicle manufacturing and motor vehicle parts manufacturing exports to the U.S. decline by 20% and 15%, respectively.' }
 	];
+
+	
 
 	let selectedScenario = 1;
 	function scenarioSelect(event) {
 		selectedScenario = event.detail.value;
 	}
 	const scenarioSelectList = scenarios.map((s) => ({ value: s.id, label: s.label }));
+	$: currentScenario = scenarios.find((s) => s.id === selectedScenario);
 
 	// ============================================================
 	// EFFECT CONFIG
 	// ============================================================
 	const effectOptions = [
-		{ id: 'Direct', label: 'Direct', dataAvailable: true },
-		{ id: 'Indirect', label: 'Indirect', dataAvailable: true },
-		{ id: 'Induced', label: 'Induced', dataAvailable: true }
+		{ id: 'Direct',   label: 'Direct',   dataAvailable: true, description: 'Direct job losses in the industries facing the tariff.' },
+		{ id: 'Indirect', label: 'Indirect', dataAvailable: true, description: 'Indirect job losses in supplier industries.' },
+		{ id: 'Induced',  label: 'Induced',  dataAvailable: true, description: 'Induced job losses from reduced household spending.' }
 	];
 
-	let selectedEffects = ['Direct'];
+	let selectedEffects = ['Direct', 'Indirect', 'Induced'];
 
 	function toggleEffect(effectId) {
 		if (selectedEffects.includes(effectId)) {
@@ -283,7 +285,7 @@
 			.join(' + ');
 		const scenarioLabel = scenarios.find(s => s.id === scenarioId)?.label ?? '';
 		const text = metric === 'Percent'
-			? `Estimated share of local workforce affected (${effectLabel}) in the ${scenarioLabel} scenario`
+			? `Estimated share of local employment affected (${effectLabel}) in the ${scenarioLabel} scenario`
 			: `Estimated job loss from ${effectLabel} in the ${scenarioLabel} scenario`;
 
 		return {
@@ -344,6 +346,14 @@
 			GEO.CSD.polyLayer, GEO.CSD.centLayer,
 			GEO.ADA.polyLayer, GEO.ADA.centLayer,
 		].filter(l => map.getLayer(l));
+
+		// toggling outlines
+		for (const key of ['CSD', 'ADA']) {
+			const id = `outline-${key.toLowerCase()}`;
+			if (map.getLayer(id)) {
+				map.setLayoutProperty(id, 'visibility', key === geoType ? 'visible' : 'none');
+			}
+		}
 
 		if (selectedEffects.length === 0) {
 			everyDataLayer.forEach(l => map.setLayoutProperty(l, 'visibility', 'none'));
@@ -458,6 +468,8 @@
 
 	onMount(async () => {
 
+		const empPromise = loadTotalEmployment();
+
 		// Load the Percent-mode denominator in parallel with map init.
 		// applyEmploymentState() is called on every tile load once this resolves.
 		try {
@@ -472,6 +484,7 @@
 			container: "map",
 			style: {
 				version: 8,
+				projection: { type: 'globe' },   // ← this line
 				glyphs: "https://schoolofcities.github.io/fonts/fonts/{fontstack}/{range}.pbf",
 				sources: {
 					osm: {
@@ -493,7 +506,7 @@
 			minZoom: 1,
 			maxZoom: 11.9,
 			pitch: 5,
-			projection: "globe",
+			//projection: "globe",
 			attributionControl: false,
 		});
 
@@ -517,15 +530,15 @@
 			map.addSource('centroids_ada',   { type: 'vector', url: 'pmtiles://' + centroids_ada, promoteId: 'ADADGUID' });
 			map.addSource('censusDivisions', { type: 'vector', url: 'pmtiles://' + censusDivisions });
 
+			// Feature-state lives on the source and is applied to tiles as they load,
+			// so this only needs to run once.
+			await empPromise;
+			applyEmploymentState();
+
 			// Newly-loaded tiles start with empty feature-state, so re-apply the
 			// employment denominator each time any CSD/ADA tile arrives (otherwise
 			// Percent mode is blank on fresh tiles).
 			const dataSources = new Set(['choropleth_csd', 'centroids_csd', 'choropleth_ada', 'centroids_ada']);
-			map.on('data', (e) => {
-				if (dataSources.has(e.sourceId) && e.tile) {
-					applyEmploymentState();
-				}
-			});
 
 			map.addSource('ne_water', {
 				type: 'geojson',
@@ -592,6 +605,7 @@
 
 			// CSD outline
 			map.addLayer({
+				layout: { visibility: 'none' },
 				id: 'outline-csd',
 				type: 'line',
 				source: 'choropleth_csd',
@@ -605,6 +619,7 @@
 
 			// ADA outline
 			map.addLayer({
+				layout: { visibility: 'none' },
 				id: 'outline-ada',
 				type: 'line',
 				source: 'choropleth_ada',
@@ -816,12 +831,21 @@
 			}, 5000);
 		});
 
-		map.on('style.load', () => {
-			map.setProjection({ type: (map.getZoom() < 7) ? 'globe' : 'mercator' });
-			map.on('zoom', () => {
-				const zoom = map.getZoom();
-				map.setProjection({ type: (zoom < 7) ? 'globe' : 'mercator' });
-			});
+		// map.on('style.load', () => {
+		// 	map.setProjection({ type: (map.getZoom() < 7) ? 'globe' : 'mercator' });
+		// 	map.on('zoom', () => {
+		// 		const zoom = map.getZoom();
+		// 		map.setProjection({ type: (zoom < 7) ? 'globe' : 'mercator' });
+		// 	});
+		// });
+
+		let isGlobe = true;   // matches projection: "globe" in the constructor
+		map.on('zoom', () => {
+			const wantGlobe = map.getZoom() < 7;
+			if (wantGlobe !== isGlobe) {      // only when crossing zoom 7
+				isGlobe = wantGlobe;
+				map.setProjection({ type: wantGlobe ? 'globe' : 'mercator' });
+			}
 		});
 
 		// Hover handlers -- geography-aware via GEO[geoType].
@@ -916,13 +940,15 @@
 
 		<h2>Mapping job impact scenarios due to U.S. tariffs in Canada</h2>
 		<p style="font-size: 14px; margin-top: 25px; line-height: 20px;">
-			By <a href="https://www.linkedin.com/in/yihoi-jung-0b95351b5/" target="_blank">Yihoi Jung</a>, <a href="https://www.geography.utoronto.ca/people/directories/all-faculty/richard-difrancesco">Richard DiFrancesco</a>, Clara Turner, <a href='https://discover.research.utoronto.ca/8035-tara-vinodrai' target='_blank'>Tara Vinodrai</a>, <a href='https://schoolofcities.utoronto.ca/people/karen-chapple/' target='_blank'>Karen Chapple</a>.<br>
-			<i>Last updated November 2, 2026.</i>
+			By <a href='https://jamaps.github.io/' target='_blank'> Jeff Allen</a>, <a href="https://www.linkedin.com/in/yihoi-jung-0b95351b5/" target="_blank">Yihoi Jung</a>, <a href="https://www.geography.utoronto.ca/people/directories/all-faculty/richard-difrancesco">Richard DiFrancesco</a>, Clara Turner, <a href='https://discover.research.utoronto.ca/8035-tara-vinodrai' target='_blank'>Tara Vinodrai</a>, <a href='https://schoolofcities.utoronto.ca/people/karen-chapple/' target='_blank'>Karen Chapple</a>.<br>
+			<i>Last updated November 8, 2026.</i>
 		</p>
 
 		<div id="select-wrapper">
 
-			<p class="summary">The following job impact scenarios have been developed using a <strong>Multiregional Input-Output (MRIO) model</strong> for each of Canada's provinces and territories. Model results are then applied to the local level to estimate impacts. The scenarios are described more fully <a href="./scenarios">here</a>.</p>
+			<p class="summary">The following employment scenarios are based on output from a <strong>Multiregional Input-Output (MRIO) model</strong> of the Canadian economy as represented by the thirteen provinces and territories.
+				 The MRIO model computes direct, indirect and induced effects for each tariff scenario by industry for each region of Canada; these effects are then extended to the local level. 
+				 The scenarios are described more fully <a href="./scenarios">here</a>.</p>
 			<div id="destext">
 				<p style="margin-bottom: -5px;">Select a scenario:</p>
 			</div>
@@ -937,11 +963,13 @@
 				listOffset={10}
 				on:change={scenarioSelect}
 			/>
-			
+			{#if currentScenario?.description}
+				<p class="scenario-description">{currentScenario.description}</p>
+			{/if}
 		</div>
 
 		<div id="destext">
-			<p style="margin-bottom: -5px;">Select effects (multiple allowed — combined additively):</p>
+			<p style="margin-bottom: -5px;">Select effects (combine as many as you like):</p>
 		</div>
 		<div class="button-group">
 			{#each effectOptions as effect}
@@ -954,6 +982,14 @@
 				</div>
 			{/each}
 		</div>
+
+		{#if selectedEffects.length > 0}
+			<div class="scenario-description effect-description">
+				{#each effectOptions.filter((e) => selectedEffects.includes(e.id)) as effect}
+					<div>{effect.description}</div>
+				{/each}
+			</div>
+		{/if}
 
 		<div id="destext">
 			<p style="margin-bottom: -5px;">Choose how to display this indicator:</p>
@@ -1152,6 +1188,14 @@
 		color: var(--brandGray90);
 		margin-top: 8px;
 		line-height: 1.5; 
+		padding: 8px;
+		border-left: 3px solid var(--brandLightBlue);
+		background-color: #f5f8fa;
+	}
+
+	.effect-description {
+		margin-top: 2px;
+		margin-bottom: 16px;
 	}
 
 	.summary {
