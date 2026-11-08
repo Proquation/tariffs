@@ -10,7 +10,7 @@ const config = {
             assets: "docs"
         }),
         paths: {
-            base: ''
+            base: process.env.BASE_PATH ?? ''
         }
     }
 };
