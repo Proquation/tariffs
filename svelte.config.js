@@ -11,6 +11,9 @@ const config = {
         }),
         paths: {
             base: process.env.BASE_PATH ?? ''
+        },
+        prerender: {
+            handleHttpError: process.env.BASE_PATH ? 'warn' : 'fail'
         }
     }
 };
